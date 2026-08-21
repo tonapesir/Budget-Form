@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="mr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>चारमाही अंदाजपत्रक 2026-27</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Devanagari:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- लॉगिन स्क्रीन -->
+  <div id="loginScreen" class="login-screen">
+    <div class="login-box">
+      <h2>चारमाही अंदाजपत्रक — लॉगिन</h2>
+      <label>युजरनेम</label>
+      <input type="text" id="loginUser" placeholder="उदा. User_1 किंवा Master" />
+      <label>पासवर्ड</label>
+      <input type="password" id="loginPass" placeholder="पासवर्ड" />
+      <button id="loginBtn">लॉगिन करा</button>
+      <p id="loginError" class="login-error"></p>
+    </div>
+  </div>
+
+  <div id="appRoot" style="display:none;">
+  <header class="topbar">
+    <h1>चारमाही सुधारित अंदाजपत्रक 2026-27</h1>
+    <p class="subtitle">शिक्षण विभाग प्राथमिक — बजेट संकलन फॉर्म</p>
+    <div class="session-info">
+      <span id="sessionUserLabel"></span>
+      <button id="logoutBtn">लॉगआऊट</button>
+    </div>
+  </header>
+
+  <div id="masterDashboard" class="master-dashboard" style="display:none;">
+    <h2>👑 मास्टर डॅशबोर्ड</h2>
+    <div class="master-actions">
+      <button id="refreshUsersBtn">🔄 युजर यादी रिफ्रेश करा</button>
+      <button id="consolidateBtn">📊 सर्वांचे एकत्रीकरण करा (Consolidate)</button>
+      <span id="consolidateStatus" class="save-status"></span>
+    </div>
+    <table class="summary-table" id="usersTable">
+      <tr><th>युजरनेम</th><th>स्थिती</th><th></th></tr>
+    </table>
+  </div>
+
+  <div class="usercode-bar" id="usercodeBar">
+    <span id="manualCodeControls">
+      <label for="userCode">युजर संकेतांक (User Code):</label>
+      <input type="text" id="userCode" placeholder="उदा. User_1 ... किंवा Master" />
+      <button id="loadBtn">📂 आधीचा डेटा उघडा</button>
+    </span>
+    <button id="summaryBtn">📊 एकूण रक्कम पहा</button>
+  </div>
+
+  <div id="summaryBox" class="summary-box" style="display:none;"></div>
+
+  <nav id="tabs" class="tabs"></nav>
+  <main id="panels" class="panels"></main>
+
+  <footer class="foot-note">
+    प्रत्येक विवरणपत्र (Annex) स्वतंत्रपणे भरून "जतन करा" बटण दाबा. नंतर कधीही युजर संकेतांक टाकून
+    "आधीचा डेटा उघडा" केल्यास पूर्वीची माहिती परत दिसेल व एडिट करता येईल.
+  </footer>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

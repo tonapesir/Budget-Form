@@ -14,7 +14,7 @@
     <div class="login-box">
       <h2>चारमाही अंदाजपत्रक — लॉगिन</h2>
       <label>युजरनेम</label>
-      <input type="text" id="loginUser" placeholder="उदा. User_1 किंवा Master" />
+      <input type="text" id="loginUser" placeholder="उदा. 5101001898 किंवा Master" />
       <label>पासवर्ड</label>
       <input type="password" id="loginPass" placeholder="पासवर्ड" />
       <button id="loginBtn">लॉगिन करा</button>
@@ -22,10 +22,25 @@
     </div>
   </div>
 
+  <!-- लॉगिन नंतर हेड + बजेट प्रकार निवडायची स्क्रीन (फक्त सामान्य युजरसाठी) -->
+  <div id="headBudgetScreen" class="login-screen" style="display:none;">
+    <div class="login-box" style="width:380px;">
+      <h2 id="hbOfficeName">कार्यालय</h2>
+      <label>लेखाशीर्ष (Head) निवडा</label>
+      <select id="headSelect"></select>
+      <label>बजेटचा प्रकार निवडा</label>
+      <select id="budgetTypeSelect">
+        <option value="4month">चारमाही बजेट (4 Month Budget)</option>
+        <option value="yearly">वार्षिक बजेट (Yearly Budget)</option>
+      </select>
+      <button id="hbContinueBtn">पुढे जा</button>
+    </div>
+  </div>
+
   <div id="appRoot" style="display:none;">
   <header class="topbar">
-    <h1>चारमाही सुधारित अंदाजपत्रक 2026-27</h1>
-    <p class="subtitle">शिक्षण विभाग प्राथमिक — बजेट संकलन फॉर्म</p>
+    <h1 id="officeNameHeader">चारमाही सुधारित अंदाजपत्रक 2026-27</h1>
+    <p class="subtitle" id="headBudgetInfo">शिक्षण विभाग प्राथमिक — बजेट संकलन फॉर्म</p>
     <div class="session-info">
       <span id="sessionUserLabel"></span>
       <button id="logoutBtn">लॉगआऊट</button>
@@ -40,7 +55,7 @@
       <span id="consolidateStatus" class="save-status"></span>
     </div>
     <table class="summary-table" id="usersTable">
-      <tr><th>युजरनेम</th><th>स्थिती</th><th></th></tr>
+      <tr><th>DDO कोड</th><th>कार्यालय</th><th>हेड</th><th>चारमाही</th><th>वार्षिक</th></tr>
     </table>
   </div>
 

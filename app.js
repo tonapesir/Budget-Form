@@ -7,10 +7,22 @@
 */
 
 // ⚠️ इथे तुमची Apps Script Web App URL टाका (README.md मध्ये स्टेप्स दिले आहेत)
-const API_URL = "https://script.google.com/macros/s/AKfycbwIGAXX6h08uTnrBuU8nnK9KYUqOboVsUFC_hxGG5oL2JpDvYNLZSK6guOKG3Arhw7vMg/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbyIQkUvIzx3M6UlFlL45e9SDtkJzUovk2uTCBFTfj-2jVw75dCCdOLYGVbadICYkctXtA/exec";
 
-let currentUser = null;
-let currentRole = null; // "user" किंवा "master"
+let currentUser = null;       // DDO कोड / युजरनेम
+let currentRole = null;       // "user" किंवा "master"
+let currentOfficeName = null;
+let currentHead = null;
+let currentActualHead = null;
+let currentBudgetType = null; // "4month" किंवा "yearly"
+let availableHeads = [];      // लॉगिनमधून मिळालेली या युजरची Allow Head यादी
+
+// युजर + हेड + बजेट-प्रकार यांच्यावरून सेव्ह/लोडसाठी वापरायचा एकच "संकेतांक" (Code.gs मधील तर्क याच पद्धतीने जुळवलेला आहे)
+function composeUserKey(username, head, budgetType) {
+  const typeCode = budgetType === "yearly" ? "Yearly" : "4Month";
+  return `${username}_${head}_${typeCode}`;
+}
+
 // प्रत्येक annexId साठी सध्याचा data (rows किंवा keyvalue) इथे मेमरीत ठेवतो
 const state = {};
 
@@ -101,6 +113,7 @@ function renderAnnexBody(annex) {
   table.appendChild(tbody);
 
   state[annex.id].forEach((row, i) => renderRow(annex, row, i));
+  recalcAnnex(annex);
 }
 
 function renderRow(annex, row, index) {
@@ -113,17 +126,16 @@ function renderRow(annex, row, index) {
 
   annex.columns.forEach(c => {
     const td = document.createElement("td");
+    const isSummedCell = row.sumRows && c.editable && c.type === "number";
     if (c.auto === "serial") {
       td.textContent = index + 1;
+    } else if (c.formula || isSummedCell) {
+      // sूत्र-आधारित किंवा उभी-बेरीज (sumRows) असलेला सेल — फक्त वाचनीय, id देऊन ठेवतो जेणेकरून recalcAnnex अपडेट करू शकेल
+      td.id = `cell-${annex.id}-${index}-${c.key}`;
+      td.className = "computed-cell";
+      td.textContent = "";
     } else if (!c.editable) {
-      if (c.formula) {
-        const val = c.formula(row);
-        row[c.key + "_computed"] = val;
-        td.textContent = formatNum(val);
-        td.className = "computed-cell";
-      } else {
-        td.textContent = row[c.key] || "";
-      }
+      td.textContent = row[c.key] || "";
     } else {
       const inp = document.createElement("input");
       inp.type = c.type === "number" ? "number" : "text";
@@ -131,7 +143,7 @@ function renderRow(annex, row, index) {
       inp.value = row[c.key] != null ? row[c.key] : "";
       inp.addEventListener("input", () => {
         row[c.key] = inp.value;
-        recalcRow(annex, row, index);
+        recalcAnnex(annex);
       });
       td.appendChild(inp);
     }
@@ -151,16 +163,38 @@ function renderRow(annex, row, index) {
   tbody.appendChild(tr);
 }
 
-function recalcRow(annex, row, index) {
-  annex.columns.forEach(c => {
-    if (c.formula) {
-      const val = c.formula(row);
-      row[c.key + "_computed"] = val;
-      const tr = document.getElementById(`row-${annex.id}-${index}`);
-      const colIdx = annex.columns.indexOf(c);
-      const td = tr.children[colIdx];
-      td.textContent = formatNum(val);
+// सर्व rows वरून-खाली या क्रमाने पुन्हा मोजतो — म्हणजे उपबेरीज (sumRows) आधीच्या ओळींवर अवलंबून
+// राहू शकते व पुढच्या मोठ्या बेरजेत (grand total) वापरली जाऊ शकते. फक्त वाचनीय सेलचा मजकूर अपडेट
+// होतो — input फिल्ड्स पुन्हा तयार होत नाहीत, त्यामुळे टायपिंग करताना फोकस सुटत नाही.
+function recalcAnnex(annex) {
+  if (annex.type === "keyvalue") return;
+  const rows = state[annex.id];
+
+  rows.forEach(row => {
+    if (row.sumRows) {
+      annex.columns.forEach(c => {
+        if (c.editable && c.type === "number") {
+          let sum = 0;
+          row.sumRows.forEach(j => { if (rows[j]) sum += num(rows[j][c.key]); });
+          row[c.key] = sum;
+        }
+      });
     }
+  });
+
+  rows.forEach(row => {
+    annex.columns.forEach(c => {
+      if (c.formula) row[c.key + "_computed"] = c.formula(row);
+    });
+  });
+
+  rows.forEach((row, i) => {
+    annex.columns.forEach(c => {
+      const el = document.getElementById(`cell-${annex.id}-${i}-${c.key}`);
+      if (!el) return;
+      if (c.formula) el.textContent = formatNum(row[c.key + "_computed"]);
+      else el.textContent = formatNum(row[c.key]);
+    });
   });
 }
 
@@ -191,7 +225,7 @@ function showTab(annexId) {
 }
 
 function getUserCode() {
-  if (currentRole === "user") return currentUser; // सामान्य युजरला स्वतःचा कोड बदलता येत नाही
+  if (currentRole === "user") return composeUserKey(currentUser, currentHead, currentBudgetType);
   const code = document.getElementById("userCode").value.trim();
   if (!code) {
     alert("कृपया आधी युजर संकेतांक (User Code) टाका.");
@@ -321,12 +355,18 @@ function applyRoleUI() {
     `लॉगिन: ${currentUser}${currentRole === "master" ? " (मास्टर)" : ""}`;
 
   if (currentRole === "master") {
+    document.getElementById("officeNameHeader").textContent = "चारमाही सुधारित अंदाजपत्रक 2026-27 — मास्टर";
+    document.getElementById("headBudgetInfo").textContent = "सर्व DDO/कार्यालयांचा एकत्रित दृश्य";
     document.getElementById("masterDashboard").style.display = "block";
     document.getElementById("manualCodeControls").style.display = "inline";
     refreshUsersList();
   } else {
+    document.getElementById("officeNameHeader").textContent = currentOfficeName || currentUser;
+    const headLabel = (currentActualHead && currentActualHead !== currentHead)
+      ? `${currentHead} (प्रत्यक्ष हेड: ${currentActualHead})` : currentHead;
+    document.getElementById("headBudgetInfo").textContent =
+      `हेड: ${headLabel} | प्रकार: ${currentBudgetType === "yearly" ? "वार्षिक बजेट" : "चारमाही बजेट"}`;
     document.getElementById("masterDashboard").style.display = "none";
-    // सामान्य युजरसाठी संकेतांक टाकायची गरज नाही — तो लॉगिनवरूनच ठरतो
     document.getElementById("manualCodeControls").style.display = "none";
     loadAllData(); // लॉगिन होताच स्वतःचा आधीचा डेटा आपोआप उघडतो
   }
@@ -346,11 +386,27 @@ async function doLogin() {
     if (result && result.ok) {
       currentUser = result.username;
       currentRole = result.role;
-      localStorage.setItem("budgetform_user", currentUser);
-      localStorage.setItem("budgetform_role", currentRole);
+      currentOfficeName = result.officeName || "";
+      availableHeads = result.heads || [];
       document.getElementById("loginScreen").style.display = "none";
-      document.getElementById("appRoot").style.display = "block";
-      applyRoleUI();
+
+      if (currentRole === "master") {
+        enterApp();
+      } else {
+        // सामान्य युजर -> आधी हेड + बजेट प्रकार निवडायला सांगतो
+        document.getElementById("hbOfficeName").textContent = currentOfficeName;
+        const sel = document.getElementById("headSelect");
+        sel.innerHTML = "";
+        availableHeads.forEach(h => {
+          const opt = document.createElement("option");
+          opt.value = h.allowHead;
+          opt.dataset.actual = h.actualHead || h.allowHead;
+          opt.textContent = (h.actualHead && h.actualHead !== h.allowHead)
+            ? `${h.allowHead} (प्रत्यक्ष हेड: ${h.actualHead})` : h.allowHead;
+          sel.appendChild(opt);
+        });
+        document.getElementById("headBudgetScreen").style.display = "flex";
+      }
     } else {
       errEl.textContent = "❌ " + (result ? result.error : "युजरनेम किंवा पासवर्ड चुकीचा आहे.");
     }
@@ -361,11 +417,29 @@ async function doLogin() {
   }
 }
 
+function enterApp() {
+  document.getElementById("headBudgetScreen").style.display = "none";
+  document.getElementById("appRoot").style.display = "block";
+  localStorage.setItem("budgetform_user", currentUser);
+  localStorage.setItem("budgetform_role", currentRole);
+  localStorage.setItem("budgetform_office", currentOfficeName || "");
+  localStorage.setItem("budgetform_head", currentHead || "");
+  localStorage.setItem("budgetform_actualhead", currentActualHead || "");
+  localStorage.setItem("budgetform_budgettype", currentBudgetType || "");
+  applyRoleUI();
+}
+
 function doLogout() {
   localStorage.removeItem("budgetform_user");
   localStorage.removeItem("budgetform_role");
-  currentUser = null; currentRole = null;
+  localStorage.removeItem("budgetform_office");
+  localStorage.removeItem("budgetform_head");
+  localStorage.removeItem("budgetform_actualhead");
+  localStorage.removeItem("budgetform_budgettype");
+  currentUser = null; currentRole = null; currentOfficeName = null;
+  currentHead = null; currentActualHead = null; currentBudgetType = null;
   document.getElementById("appRoot").style.display = "none";
+  document.getElementById("headBudgetScreen").style.display = "none";
   document.getElementById("loginScreen").style.display = "flex";
   document.getElementById("loginUser").value = "";
   document.getElementById("loginPass").value = "";
@@ -375,23 +449,29 @@ function doLogout() {
 
 async function refreshUsersList() {
   const table = document.getElementById("usersTable");
-  table.innerHTML = "<tr><th>युजरनेम</th><th>स्थिती</th><th></th></tr>";
+  table.innerHTML = "<tr><th>DDO कोड</th><th>कार्यालय</th><th>हेड</th><th>चारमाही</th><th>वार्षिक</th></tr>";
   try {
     const result = await apiCall({ action: "listUsers" });
     if (!result || !result.ok) return;
-    result.users.forEach(u => {
+    result.entries.forEach(u => {
       const tr = document.createElement("tr");
-      tr.innerHTML = `<td>${u.username}</td>
-        <td>${u.hasData ? "✅ भरले (शेवटचे: " + u.lastUpdated + ")" : "⏳ अजून भरले नाही"}</td>
-        <td></td>`;
-      const btn = document.createElement("button");
-      btn.className = "view-user-btn";
-      btn.textContent = "👁 पहा";
-      btn.onclick = () => {
-        document.getElementById("userCode").value = u.username;
-        loadAllData();
-      };
-      tr.lastElementChild.appendChild(btn);
+      tr.innerHTML = `<td>${u.username}</td><td>${u.officeName}</td><td>${u.allowHead}</td>`;
+      ["fourMonth", "yearly"].forEach(typeKey => {
+        const td = document.createElement("td");
+        const st = typeKey === "fourMonth" ? u.status4Month : u.statusYearly;
+        const label = st.hasData ? "✅" : "⏳";
+        const btn = document.createElement("button");
+        btn.className = "view-user-btn";
+        btn.textContent = label + " पहा";
+        btn.title = st.hasData ? ("शेवटचे: " + st.lastUpdated) : "अजून भरले नाही";
+        btn.onclick = () => {
+          document.getElementById("userCode").value =
+            composeUserKey(u.username, u.allowHead, typeKey === "fourMonth" ? "4month" : "yearly");
+          loadAllData();
+        };
+        td.appendChild(btn);
+        tr.appendChild(td);
+      });
       table.appendChild(tr);
     });
   } catch (e) { /* silent */ }
@@ -403,9 +483,7 @@ async function consolidateAll() {
   try {
     const result = await apiCall({ action: "consolidate" });
     if (result && result.ok) {
-      statusEl.textContent = "✅ एकत्रीकरण पूर्ण झाले — 'Master' शीटमध्ये सेव्ह झाले.";
-      document.getElementById("userCode").value = "Master";
-      loadAllData();
+      statusEl.textContent = "✅ एकत्रीकरण पूर्ण झाले — प्रत्येक हेड/प्रकार गटासाठी 'Master' शीटमध्ये स्वतंत्र टॅब सेव्ह झाले.";
     } else {
       statusEl.textContent = "❌ त्रुटी: " + (result ? result.error : "अज्ञात");
     }
@@ -422,6 +500,15 @@ window.addEventListener("DOMContentLoaded", () => {
   document.getElementById("logoutBtn").onclick = doLogout;
   document.getElementById("refreshUsersBtn").onclick = refreshUsersList;
   document.getElementById("consolidateBtn").onclick = consolidateAll;
+  document.getElementById("hbContinueBtn").onclick = () => {
+    const sel = document.getElementById("headSelect");
+    const opt = sel.options[sel.selectedIndex];
+    if (!opt) { alert("कृपया हेड निवडा."); return; }
+    currentHead = opt.value;
+    currentActualHead = opt.dataset.actual;
+    currentBudgetType = document.getElementById("budgetTypeSelect").value;
+    enterApp();
+  };
 
   // आधीच लॉगिन केलेले असल्यास (localStorage मध्ये) थेट आत घेऊन जातो
   const savedUser = localStorage.getItem("budgetform_user");
@@ -429,6 +516,10 @@ window.addEventListener("DOMContentLoaded", () => {
   if (savedUser && savedRole) {
     currentUser = savedUser;
     currentRole = savedRole;
+    currentOfficeName = localStorage.getItem("budgetform_office") || "";
+    currentHead = localStorage.getItem("budgetform_head") || "";
+    currentActualHead = localStorage.getItem("budgetform_actualhead") || "";
+    currentBudgetType = localStorage.getItem("budgetform_budgettype") || "4month";
     document.getElementById("loginScreen").style.display = "none";
     document.getElementById("appRoot").style.display = "block";
     applyRoleUI();

@@ -148,83 +148,157 @@ function loadAllData(req) {
   return { ok: true, data };
 }
 
-/* ================= Users / Login ================= */
+function composeUserKey_(username, head, budgetType) {
+  const typeCode = budgetType === "yearly" ? "Yearly" : "4Month";
+  return username + "_" + head + "_" + typeCode;
+}
+
+/* ================= Users / Login (DDO कोड आधारित) ================= */
+// USERS_SHEET_ID मधील अपेक्षित कॉलम्स (row1 हेडर):
+// A: डी.डी.कोड/ User Name | B: Password | C: कार्यालयाचे नाव | D: Allow Head | E: Actual Head | F: Type Of Budget (वापरले जात नाही)
 
 function getUsersList_() {
   const ss = SpreadsheetApp.openById(USERS_SHEET_ID);
   const sheet = ss.getSheets()[0];
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return [];
-  const values = sheet.getRange(2, 1, lastRow - 1, 2).getValues(); // A: User Name, B: Password
+  const values = sheet.getRange(2, 1, lastRow - 1, 5).getValues();
   return values
-    .filter(r => r[0])
-    .map(r => ({ username: String(r[0]).trim(), password: String(r[1]).trim() }));
+    .filter(r => r[0] !== "" && r[0] !== null)
+    .map(r => ({
+      username: String(r[0]).trim(),
+      password: String(r[1]).trim(),
+      officeName: String(r[2] || "").trim(),
+      allowHead: String(r[3] || "").trim(),
+      actualHead: String(r[4] || "").trim(),
+    }));
 }
 
 function loginUser(req) {
   const { username, password } = req;
   if (!username || !password) return { ok: false, error: "युजरनेम/पासवर्ड रिकामे आहेत." };
-  const users = getUsersList_();
-  const match = users.find(u => u.username === username.trim() && u.password === password);
-  if (!match) return { ok: false, error: "युजरनेम किंवा पासवर्ड चुकीचा आहे." };
-  const role = match.username === MASTER_USERNAME ? "master" : "user";
-  return { ok: true, username: match.username, role };
+  const uname = username.trim();
+  const rows = getUsersList_().filter(u => u.username === uname && u.password === password);
+  if (!rows.length) return { ok: false, error: "युजरनेम किंवा पासवर्ड चुकीचा आहे." };
+
+  if (uname === MASTER_USERNAME) {
+    return { ok: true, username: uname, role: "master" };
+  }
+
+  // या DDO कोडाला परवानगी असलेले सर्व Head (डुप्लिकेट काढून)
+  const seen = {};
+  const heads = [];
+  rows.forEach(r => {
+    if (!r.allowHead || seen[r.allowHead]) return;
+    seen[r.allowHead] = true;
+    heads.push({ allowHead: r.allowHead, actualHead: r.actualHead || r.allowHead });
+  });
+
+  return {
+    ok: true,
+    username: uname,
+    role: "user",
+    officeName: rows[0].officeName,
+    heads: heads,
+  };
 }
 
 function listUsers() {
-  const users = getUsersList_().filter(u => u.username !== MASTER_USERNAME);
+  const rows = getUsersList_().filter(u => u.username !== MASTER_USERNAME && u.allowHead);
   const folder = DriveApp.getFolderById(FOLDER_ID);
-  const result = users.map(u => {
-    const fileName = "बजेट_2026-27_" + u.username;
-    const files = folder.getFilesByName(fileName);
-    if (files.hasNext()) {
-      const file = files.next();
-      return { username: u.username, hasData: true, lastUpdated: file.getLastUpdated().toLocaleString("mr-IN") };
+  const fileCache = {}; // fileName -> file (किंवा null)
+
+  function statusFor(username, head, budgetType) {
+    const key = composeUserKey_(username, head, budgetType);
+    const fileName = "बजेट_2026-27_" + key;
+    if (!(fileName in fileCache)) {
+      const files = folder.getFilesByName(fileName);
+      fileCache[fileName] = files.hasNext() ? files.next() : null;
     }
-    return { username: u.username, hasData: false, lastUpdated: "" };
-  });
-  return { ok: true, users: result };
+    const file = fileCache[fileName];
+    return file ? { hasData: true, lastUpdated: file.getLastUpdated().toLocaleString("mr-IN") }
+                : { hasData: false, lastUpdated: "" };
+  }
+
+  const entries = rows.map(u => ({
+    username: u.username,
+    officeName: u.officeName,
+    allowHead: u.allowHead,
+    actualHead: u.actualHead,
+    status4Month: statusFor(u.username, u.allowHead, "4month"),
+    statusYearly: statusFor(u.username, u.allowHead, "yearly"),
+  }));
+
+  return { ok: true, entries };
 }
 
 /* ================= एकत्रीकरण (Consolidate) ================= */
 
 function consolidateAll() {
-  const users = getUsersList_().filter(u => u.username !== MASTER_USERNAME).map(u => u.username);
+  const rows = getUsersList_().filter(u => u.username !== MASTER_USERNAME && u.allowHead);
+  if (!rows.length) return { ok: false, error: "Users शीटमध्ये DDO/Head माहिती सापडली नाही." };
   const folder = DriveApp.getFolderById(FOLDER_ID);
+  const budgetTypes = ["4month", "yearly"];
 
-  // प्रत्येक युजरची स्प्रेडशीट उघडून ठेवतो (जी सापडेल तीच)
-  const userSheets = {}; // username -> Spreadsheet
-  users.forEach(u => {
-    const files = folder.getFilesByName("बजेट_2026-27_" + u);
-    if (files.hasNext()) userSheets[u] = SpreadsheetApp.open(files.next());
+  // गट तयार करतो: head -> { "4month": [usernames...], "yearly": [usernames...] }
+  const headsMap = {};
+  rows.forEach(r => {
+    if (!headsMap[r.allowHead]) headsMap[r.allowHead] = new Set();
+    headsMap[r.allowHead].add(r.username);
   });
 
-  if (Object.keys(userSheets).length === 0) {
-    return { ok: false, error: "अजून कोणत्याही युजरने डेटा भरलेला नाही." };
+  const masterSS = getOrCreateUserSpreadsheet(MASTER_USERNAME);
+  const groupsProcessed = [];
+
+  Object.keys(headsMap).forEach(head => {
+    const usernames = Array.from(headsMap[head]);
+    budgetTypes.forEach(budgetType => {
+      // या (head, budgetType) गटातील ज्या DDO नी प्रत्यक्ष डेटा भरला आहे तेवढेच स्प्रेडशीट उघडतो
+      const userSheets = {};
+      usernames.forEach(u => {
+        const key = composeUserKey_(u, head, budgetType);
+        const files = folder.getFilesByName("बजेट_2026-27_" + key);
+        if (files.hasNext()) userSheets[u] = SpreadsheetApp.open(files.next());
+      });
+      if (Object.keys(userSheets).length === 0) return; // या गटात अजून कोणीही भरलेले नाही
+
+      const suffix = "H" + head + "_" + (budgetType === "yearly" ? "Y" : "4M");
+      consolidateGroup_(masterSS, userSheets, suffix);
+      groupsProcessed.push(head + " / " + (budgetType === "yearly" ? "वार्षिक" : "चारमाही") +
+        " (" + Object.keys(userSheets).length + " कार्यालये)");
+    });
+  });
+
+  const infoSheet = masterSS.getSheetByName("माहिती");
+  if (infoSheet) {
+    infoSheet.getRange(1, 1).setValue("युजर: " + MASTER_USERNAME + " (एकत्रित)");
+    infoSheet.getRange(2, 1).setValue("शेवटचे एकत्रीकरण: " + new Date().toLocaleString("mr-IN"));
+    infoSheet.getRange(3, 1).setValue("गट: " + groupsProcessed.join(" | "));
   }
 
-  // Master स्प्रेडशीट तयार/उघडतो (वेगळ्या नावाने, यूजर-कोड सारखेच नामकरण वापरतो जेणेकरून
-  // फ्रंटएंडच्या loadAll ने "Master" कोड टाकल्यास तीच फाईल उघडेल)
-  const masterSS = getOrCreateUserSpreadsheet(MASTER_USERNAME);
+  if (!groupsProcessed.length) return { ok: false, error: "अजून कोणत्याही DDO ने डेटा भरलेला नाही." };
+  return { ok: true, groups: groupsProcessed };
+}
 
+// एका (Head + Budget Type) गटातील सर्व DDO चा डेटा एकत्र करून masterSS मध्ये "<annexId>_<suffix>" टॅबमध्ये लिहितो
+function consolidateGroup_(masterSS, userSheets, suffix) {
   Object.keys(ANNEX_TYPES).forEach(annexId => {
     const type = ANNEX_TYPES[annexId];
-    const sheet = getOrCreateAnnexSheet(masterSS, annexId);
+    const tabName = (annexId + "_" + suffix).substring(0, 99); // Google Sheets tab नाव मर्यादा
+    const sheet = getOrCreateAnnexSheet(masterSS, tabName);
     sheet.clearContents();
 
-    // प्रत्येक युजरच्या sheet मधून raw values (keys सह) वाचतो
-    const perUser = {}; // username -> {keys:[], rows: [[...]]}
+    const perUser = {};
     Object.keys(userSheets).forEach(u => {
-      const uss = userSheets[u];
-      const s = uss.getSheetByName(annexId);
+      const s = userSheets[u].getSheetByName(annexId);
       if (!s) return;
       const lastRow = s.getLastRow(), lastCol = s.getLastColumn();
       if (lastRow < 1 || lastCol < 1) return;
       const keys = s.getRange(1, 1, 1, lastCol).getValues()[0];
-      let rows = [];
-      if (lastRow >= 3) rows = s.getRange(3, 1, lastRow - 2, lastCol).getValues()
+      let vals = [];
+      if (lastRow >= 3) vals = s.getRange(3, 1, lastRow - 2, lastCol).getValues()
         .filter(row => row.some(c => c !== "" && c !== null));
-      perUser[u] = { keys, rows };
+      perUser[u] = { keys, rows: vals };
     });
 
     const anyUser = Object.keys(perUser)[0];
@@ -232,7 +306,6 @@ function consolidateAll() {
     const keys = perUser[anyUser].keys;
 
     if (type === "fixed") {
-      // row-index नुसार जुळवून, संख्या असलेले कॉलम बेरीज करतो; बाकी (लेबल) कॉलम पहिल्या युजरकडून घेतो
       const rowCount = Math.max(...Object.values(perUser).map(p => p.rows.length));
       const outRows = [];
       for (let i = 0; i < rowCount; i++) {
@@ -250,8 +323,15 @@ function consolidateAll() {
       }
       sheet.getRange(1, 1, 1, keys.length).setValues([keys]).setFontWeight("bold");
       if (outRows.length) sheet.getRange(3, 1, outRows.length, keys.length).setValues(outRows);
+    } else if (type === "keyvalue") {
+      const outKeys = ["srcUser"].concat(keys);
+      sheet.getRange(1, 1, 1, outKeys.length).setValues([outKeys]).setFontWeight("bold");
+      const kvRows = Object.keys(perUser).map(u => {
+        const valRow = perUser[u].rows[0] || keys.map(() => "");
+        return [u].concat(valRow);
+      });
+      if (kvRows.length) sheet.getRange(3, 1, kvRows.length, outKeys.length).setValues(kvRows);
     } else {
-      // dynamic किंवा keyvalue: सर्व युजर्सच्या ओळी एकत्र करतो, "srcUser"/पहिल्या कॉलममध्ये युजरनेम भरतो
       const srcUserIdx = keys.indexOf("srcUser");
       const outRows = [];
       Object.keys(perUser).forEach(u => {
@@ -261,29 +341,9 @@ function consolidateAll() {
           outRows.push(copy);
         });
       });
-      if (type === "keyvalue") {
-        // keyvalue: प्रत्येक युजरची एक ओळ, पहिल्या कॉलमला "युजर" जोडतो
-        const outKeys = ["srcUser"].concat(keys);
-        sheet.getRange(1, 1, 1, outKeys.length).setValues([outKeys]).setFontWeight("bold");
-        const kvRows = Object.keys(perUser).map(u => {
-          const valRow = perUser[u].rows[0] || keys.map(() => "");
-          return [u].concat(valRow);
-        });
-        if (kvRows.length) sheet.getRange(3, 1, kvRows.length, outKeys.length).setValues(kvRows);
-      } else {
-        sheet.getRange(1, 1, 1, keys.length).setValues([keys]).setFontWeight("bold");
-        if (outRows.length) sheet.getRange(3, 1, outRows.length, keys.length).setValues(outRows);
-      }
+      sheet.getRange(1, 1, 1, keys.length).setValues([keys]).setFontWeight("bold");
+      if (outRows.length) sheet.getRange(3, 1, outRows.length, keys.length).setValues(outRows);
     }
     sheet.setFrozenRows(2);
   });
-
-  const infoSheet = masterSS.getSheetByName("माहिती");
-  if (infoSheet) {
-    infoSheet.getRange(1, 1).setValue("युजर: " + MASTER_USERNAME + " (एकत्रित)");
-    infoSheet.getRange(2, 1).setValue("शेवटचे एकत्रीकरण: " + new Date().toLocaleString("mr-IN"));
-    infoSheet.getRange(3, 1).setValue("समाविष्ट युजर्स: " + Object.keys(userSheets).join(", "));
-  }
-
-  return { ok: true, includedUsers: Object.keys(userSheets) };
 }

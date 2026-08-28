@@ -289,7 +289,9 @@ async function saveAnnex(annexId) {
 async function loadAllData() {
   const user = getUserCode();
   if (!user) return;
-  currentUser = user;
+  // टीप: इथे currentUser ला 'user' (composite key) असाइन करत नाही — currentUser नेहमी
+  // लॉगिन युजरनेमच राहायला हवा, नाहीतर पुढच्या प्रत्येक सेव्ह/लोडमध्ये composeUserKey पुन:पुन्हा
+  // लागू होऊन "...._22020271_4Month_22020271_4Month" सारखी चुकीची डबल-की तयार होते.
   const btn = document.getElementById("loadBtn");
   btn.disabled = true;
   btn.textContent = "उघडत आहे...";

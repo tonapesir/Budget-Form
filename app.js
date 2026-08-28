@@ -450,11 +450,14 @@ function doLogout() {
 
 /* ================= मास्टर डॅशबोर्ड ================= */
 
+let _usersListReqId = 0;
 async function refreshUsersList() {
+  const myReqId = ++_usersListReqId;
   const table = document.getElementById("usersTable");
-  table.innerHTML = "<tr><th>DDO कोड</th><th>कार्यालय</th><th>हेड</th><th>चारमाही</th><th>वार्षिक</th></tr>";
   try {
     const result = await apiCall({ action: "listUsers" });
+    if (myReqId !== _usersListReqId) return; // दरम्यान दुसरी नवीन विनंती सुरू झाली असेल तर ही जुनी विनंती दुर्लक्षित करतो
+    table.innerHTML = "<tr><th>DDO कोड</th><th>कार्यालय</th><th>हेड</th><th>चारमाही</th><th>वार्षिक</th></tr>";
     if (!result || !result.ok) return;
     result.entries.forEach(u => {
       const tr = document.createElement("tr");
@@ -480,15 +483,18 @@ async function refreshUsersList() {
   } catch (e) { /* silent */ }
 }
 
+let _groupsReqId = 0;
 async function refreshConsolidatedGroups() {
+  const myReqId = ++_groupsReqId;
   const groupsTable = document.getElementById("groupsTable");
   const byTypeTable = document.getElementById("byTypeTable");
   const grandTable = document.getElementById("grandTotalTable");
-  groupsTable.innerHTML = "<tr><th>लेखाशीर्ष (Head)</th><th>बजेट प्रकार</th><th>शेवटचे अपडेट</th><th></th></tr>";
-  byTypeTable.innerHTML = "<tr><th>बजेट प्रकार</th><th>शेवटचे अपडेट</th><th></th></tr>";
-  grandTable.innerHTML = "<tr><th>शेवटचे अपडेट</th><th></th></tr>";
   try {
     const result = await apiCall({ action: "listConsolidatedGroups" });
+    if (myReqId !== _groupsReqId) return; // जुनी विनंती असल्यास दुर्लक्ष करतो
+    groupsTable.innerHTML = "<tr><th>लेखाशीर्ष (Head)</th><th>बजेट प्रकार</th><th>शेवटचे अपडेट</th><th></th></tr>";
+    byTypeTable.innerHTML = "<tr><th>बजेट प्रकार</th><th>शेवटचे अपडेट</th><th></th></tr>";
+    grandTable.innerHTML = "<tr><th>शेवटचे अपडेट</th><th></th></tr>";
     if (!result || !result.ok) return;
 
     if (!result.groups.length) {

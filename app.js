@@ -7,7 +7,7 @@
 */
 
 // ⚠️ इथे तुमची Apps Script Web App URL टाका (README.md मध्ये स्टेप्स दिले आहेत)
-const API_URL = "https://script.google.com/macros/s/AKfycbyIQkUvIzx3M6UlFlL45e9SDtkJzUovk2uTCBFTfj-2jVw75dCCdOLYGVbadICYkctXtA/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbzqmbPQfXPC5QzmetZp2nTgVIdPzzTDFGrYSoqMXJkJ-wwAYynj3itnE7PGoSPqvIul7A/exec";
 
 let currentUser = null;       // DDO कोड / युजरनेम
 let currentRole = null;       // "user" किंवा "master"
@@ -360,6 +360,7 @@ function applyRoleUI() {
     document.getElementById("masterDashboard").style.display = "block";
     document.getElementById("manualCodeControls").style.display = "inline";
     refreshUsersList();
+    refreshConsolidatedGroups();
   } else {
     document.getElementById("officeNameHeader").textContent = currentOfficeName || currentUser;
     const headLabel = (currentActualHead && currentActualHead !== currentHead)
@@ -477,13 +478,71 @@ async function refreshUsersList() {
   } catch (e) { /* silent */ }
 }
 
+async function refreshConsolidatedGroups() {
+  const groupsTable = document.getElementById("groupsTable");
+  const byTypeTable = document.getElementById("byTypeTable");
+  const grandTable = document.getElementById("grandTotalTable");
+  groupsTable.innerHTML = "<tr><th>लेखाशीर्ष (Head)</th><th>बजेट प्रकार</th><th>शेवटचे अपडेट</th><th></th></tr>";
+  byTypeTable.innerHTML = "<tr><th>बजेट प्रकार</th><th>शेवटचे अपडेट</th><th></th></tr>";
+  grandTable.innerHTML = "<tr><th>शेवटचे अपडेट</th><th></th></tr>";
+  try {
+    const result = await apiCall({ action: "listConsolidatedGroups" });
+    if (!result || !result.ok) return;
+
+    if (!result.groups.length) {
+      groupsTable.innerHTML += `<tr><td colspan="4">अजून कोणतेही एकत्रीकरण झालेले नाही.</td></tr>`;
+    }
+    result.groups.forEach(g => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${g.head}</td>
+        <td>${g.budgetType === "yearly" ? "वार्षिक बजेट" : "चारमाही बजेट"}</td>
+        <td>${g.lastUpdated}</td><td></td>`;
+      addViewButton(tr, g.key);
+      groupsTable.appendChild(tr);
+    });
+
+    if (!result.byType.length) {
+      byTypeTable.innerHTML += `<tr><td colspan="3">अजून कोणतेही एकत्रीकरण झालेले नाही.</td></tr>`;
+    }
+    result.byType.forEach(g => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${g.budgetType === "yearly" ? "वार्षिक बजेट (सर्व Head मिळून)" : "चारमाही बजेट (सर्व Head मिळून)"}</td>
+        <td>${g.lastUpdated}</td><td></td>`;
+      addViewButton(tr, g.key);
+      byTypeTable.appendChild(tr);
+    });
+
+    if (result.grandTotal) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${result.grandTotal.lastUpdated}</td><td></td>`;
+      addViewButton(tr, result.grandTotal.key);
+      grandTable.appendChild(tr);
+    } else {
+      grandTable.innerHTML += `<tr><td colspan="2">अजून कोणतेही एकत्रीकरण झालेले नाही.</td></tr>`;
+    }
+  } catch (e) { /* silent */ }
+}
+
+function addViewButton(tr, key) {
+  const btn = document.createElement("button");
+  btn.className = "view-user-btn";
+  btn.textContent = "👁 पहा";
+  btn.onclick = () => {
+    document.getElementById("userCode").value = key;
+    loadAllData();
+  };
+  tr.lastElementChild.appendChild(btn);
+}
+
 async function consolidateAll() {
   const statusEl = document.getElementById("consolidateStatus");
   statusEl.textContent = "एकत्रीकरण चालू आहे... थोडा वेळ लागू शकतो.";
   try {
     const result = await apiCall({ action: "consolidate" });
     if (result && result.ok) {
-      statusEl.textContent = "✅ एकत्रीकरण पूर्ण झाले — प्रत्येक हेड/प्रकार गटासाठी 'Master' शीटमध्ये स्वतंत्र टॅब सेव्ह झाले.";
+      statusEl.textContent = `✅ एकत्रीकरण पूर्ण झाले — ${result.groups.length} Head+प्रकार गट, ` +
+        `${result.byType.length} प्रकार-निहाय एकत्रीकरण, व संपूर्ण एकत्रित बजेट तयार/अपडेट झाले.`;
+      refreshConsolidatedGroups();
     } else {
       statusEl.textContent = "❌ त्रुटी: " + (result ? result.error : "अज्ञात");
     }

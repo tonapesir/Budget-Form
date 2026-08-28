@@ -42,6 +42,8 @@ function doPost(e) {
       result = listUsers();
     } else if (req.action === "consolidate") {
       result = consolidateAll();
+    } else if (req.action === "listConsolidatedGroups") {
+      result = listConsolidatedGroups();
     } else {
       result = { ok: false, error: "अज्ञात action: " + req.action };
     }
@@ -153,6 +155,12 @@ function composeUserKey_(username, head, budgetType) {
   return username + "_" + head + "_" + typeCode;
 }
 
+// प्रत्येक (Head + Budget Type) गटासाठी वेगळी Master स्प्रेडशीट फाईल — उदा. "Master_22021091_Yearly"
+function composeMasterGroupKey_(head, budgetType) {
+  const typeCode = budgetType === "yearly" ? "Yearly" : "4Month";
+  return "Master_" + head + "_" + typeCode;
+}
+
 /* ================= Users / Login (DDO कोड आधारित) ================= */
 // USERS_SHEET_ID मधील अपेक्षित कॉलम्स (row1 हेडर):
 // A: डी.डी.कोड/ User Name | B: Password | C: कार्यालयाचे नाव | D: Allow Head | E: Actual Head | F: Type Of Budget (वापरले जात नाही)
@@ -240,20 +248,20 @@ function consolidateAll() {
   const folder = DriveApp.getFolderById(FOLDER_ID);
   const budgetTypes = ["4month", "yearly"];
 
-  // गट तयार करतो: head -> { "4month": [usernames...], "yearly": [usernames...] }
+  // गट तयार करतो: head -> Set(usernames)
   const headsMap = {};
   rows.forEach(r => {
     if (!headsMap[r.allowHead]) headsMap[r.allowHead] = new Set();
     headsMap[r.allowHead].add(r.username);
   });
 
-  const masterSS = getOrCreateUserSpreadsheet(MASTER_USERNAME);
-  const groupsProcessed = [];
+  const groupsProcessed = []; // पातळी 1: {head, budgetType, key, officeCount}
+  const groupSheetsByType = { "4month": {}, "yearly": {} }; // budgetType -> {head: Spreadsheet} (पातळी 2 साठी)
 
+  /* ---------- पातळी 1: Head + Budget Type निहाय ---------- */
   Object.keys(headsMap).forEach(head => {
     const usernames = Array.from(headsMap[head]);
     budgetTypes.forEach(budgetType => {
-      // या (head, budgetType) गटातील ज्या DDO नी प्रत्यक्ष डेटा भरला आहे तेवढेच स्प्रेडशीट उघडतो
       const userSheets = {};
       usernames.forEach(u => {
         const key = composeUserKey_(u, head, budgetType);
@@ -262,30 +270,109 @@ function consolidateAll() {
       });
       if (Object.keys(userSheets).length === 0) return; // या गटात अजून कोणीही भरलेले नाही
 
-      const suffix = "H" + head + "_" + (budgetType === "yearly" ? "Y" : "4M");
-      consolidateGroup_(masterSS, userSheets, suffix);
-      groupsProcessed.push(head + " / " + (budgetType === "yearly" ? "वार्षिक" : "चारमाही") +
-        " (" + Object.keys(userSheets).length + " कार्यालये)");
+      const groupKey = composeMasterGroupKey_(head, budgetType);
+      const groupSS = getOrCreateUserSpreadsheet(groupKey);
+      consolidateGroup_(groupSS, userSheets);
+
+      const officeCount = Object.keys(userSheets).length;
+      const infoSheet = groupSS.getSheetByName("माहिती");
+      if (infoSheet) {
+        infoSheet.getRange(1, 1).setValue("एकत्रित: लेखाशीर्ष " + head + " — " +
+          (budgetType === "yearly" ? "वार्षिक बजेट" : "चारमाही बजेट"));
+        infoSheet.getRange(2, 1).setValue("शेवटचे एकत्रीकरण: " + new Date().toLocaleString("mr-IN"));
+        infoSheet.getRange(3, 1).setValue("समाविष्ट DDO कार्यालये (" + officeCount + "): " + Object.keys(userSheets).join(", "));
+      }
+
+      groupsProcessed.push({ head, budgetType, key: groupKey, officeCount });
+      groupSheetsByType[budgetType][head] = groupSS;
     });
   });
 
-  const infoSheet = masterSS.getSheetByName("माहिती");
-  if (infoSheet) {
-    infoSheet.getRange(1, 1).setValue("युजर: " + MASTER_USERNAME + " (एकत्रित)");
-    infoSheet.getRange(2, 1).setValue("शेवटचे एकत्रीकरण: " + new Date().toLocaleString("mr-IN"));
-    infoSheet.getRange(3, 1).setValue("गट: " + groupsProcessed.join(" | "));
+  if (!groupsProcessed.length) return { ok: false, error: "अजून कोणत्याही DDO ने डेटा भरलेला नाही." };
+
+  /* ---------- पातळी 2: फक्त Budget Type निहाय (सर्व Head मिळून) ---------- */
+  const byTypeProcessed = []; // {budgetType, key, headCount}
+  const typeConsolidatedSheets = {}; // budgetType -> Spreadsheet (पातळी 3 साठी)
+  budgetTypes.forEach(budgetType => {
+    const headSheets = groupSheetsByType[budgetType];
+    const headCount = Object.keys(headSheets).length;
+    if (headCount === 0) return;
+
+    const typeKey = "MasterByType_" + (budgetType === "yearly" ? "Yearly" : "4Month");
+    const typeSS = getOrCreateUserSpreadsheet(typeKey);
+    consolidateGroup_(typeSS, headSheets); // इथे स्त्रोत = head (username ऐवजी) — तेच जनरिक फंक्शन वापरतो
+
+    const infoSheet = typeSS.getSheetByName("माहिती");
+    if (infoSheet) {
+      infoSheet.getRange(1, 1).setValue("एकत्रित: सर्व लेखाशीर्ष — " +
+        (budgetType === "yearly" ? "वार्षिक बजेट" : "चारमाही बजेट"));
+      infoSheet.getRange(2, 1).setValue("शेवटचे एकत्रीकरण: " + new Date().toLocaleString("mr-IN"));
+      infoSheet.getRange(3, 1).setValue("समाविष्ट लेखाशीर्ष (" + headCount + "): " + Object.keys(headSheets).join(", "));
+    }
+
+    byTypeProcessed.push({ budgetType, key: typeKey, headCount });
+    typeConsolidatedSheets[budgetType] = typeSS;
+  });
+
+  /* ---------- पातळी 3: संपूर्ण एकत्रित बजेट (सर्व Head + दोन्ही प्रकार मिळून) ---------- */
+  let grandTotal = null;
+  if (Object.keys(typeConsolidatedSheets).length > 0) {
+    const grandKey = "MasterGrandTotal";
+    const grandSS = getOrCreateUserSpreadsheet(grandKey);
+    consolidateGroup_(grandSS, typeConsolidatedSheets); // स्त्रोत = budgetType ("yearly"/"4month")
+
+    const infoSheet = grandSS.getSheetByName("माहिती");
+    if (infoSheet) {
+      infoSheet.getRange(1, 1).setValue("संपूर्ण एकत्रित बजेट — सर्व लेखाशीर्ष व दोन्ही प्रकार मिळून");
+      infoSheet.getRange(2, 1).setValue("शेवटचे एकत्रीकरण: " + new Date().toLocaleString("mr-IN"));
+      infoSheet.getRange(3, 1).setValue("⚠️ लक्षात ठेवा: यात वार्षिक व चारमाही बजेटचे आकडे एकत्र बेरीज झालेले आहेत.");
+    }
+    grandTotal = { key: grandKey };
   }
 
-  if (!groupsProcessed.length) return { ok: false, error: "अजून कोणत्याही DDO ने डेटा भरलेला नाही." };
-  return { ok: true, groups: groupsProcessed };
+  return { ok: true, groups: groupsProcessed, byType: byTypeProcessed, grandTotal };
 }
 
-// एका (Head + Budget Type) गटातील सर्व DDO चा डेटा एकत्र करून masterSS मध्ये "<annexId>_<suffix>" टॅबमध्ये लिहितो
-function consolidateGroup_(masterSS, userSheets, suffix) {
+// याआधी तयार झालेले एकत्रीकरण (तिन्ही पातळ्या) फोल्डरमध्ये शोधून यादी परत करतो —
+// Master ने पुन्हा लॉगिन केल्यावर आधीचे एकत्रीकरण लगेच दिसण्यासाठी उपयोगी
+function listConsolidatedGroups() {
+  const folder = DriveApp.getFolderById(FOLDER_ID);
+  const filePrefix = "बजेट_2026-27_";
+  const files = folder.getFiles();
+  const groups = [];    // पातळी 1: head+type
+  const byType = [];    // पातळी 2: type-only
+  let grandTotal = null; // पातळी 3
+
+  while (files.hasNext()) {
+    const f = files.next();
+    const name = f.getName();
+    if (name.indexOf(filePrefix) !== 0) continue;
+    const rest = name.substring(filePrefix.length);
+    const lastUpdated = f.getLastUpdated().toLocaleString("mr-IN");
+
+    if (rest.indexOf("Master_") === 0) {
+      const parts = rest.substring("Master_".length).split("_");
+      const typeCode = parts.pop();
+      const head = parts.join("_");
+      groups.push({ head, budgetType: typeCode === "Yearly" ? "yearly" : "4month",
+        key: "Master_" + head + "_" + typeCode, lastUpdated });
+    } else if (rest.indexOf("MasterByType_") === 0) {
+      const typeCode = rest.substring("MasterByType_".length);
+      byType.push({ budgetType: typeCode === "Yearly" ? "yearly" : "4month",
+        key: "MasterByType_" + typeCode, lastUpdated });
+    } else if (rest === "MasterGrandTotal") {
+      grandTotal = { key: "MasterGrandTotal", lastUpdated };
+    }
+  }
+  return { ok: true, groups, byType, grandTotal };
+}
+
+// एका (Head + Budget Type) गटातील सर्व DDO चा डेटा एकत्र करून त्या गटाच्या स्वतंत्र स्प्रेडशीटमध्ये
+// (groupSS) प्रत्येक Annex साठी सर्वसाधारण annexId नावाच्या टॅबमध्ये लिहितो
+function consolidateGroup_(groupSS, userSheets) {
   Object.keys(ANNEX_TYPES).forEach(annexId => {
     const type = ANNEX_TYPES[annexId];
-    const tabName = (annexId + "_" + suffix).substring(0, 99); // Google Sheets tab नाव मर्यादा
-    const sheet = getOrCreateAnnexSheet(masterSS, tabName);
+    const sheet = getOrCreateAnnexSheet(groupSS, annexId);
     sheet.clearContents();
 
     const perUser = {};

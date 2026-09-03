@@ -7,7 +7,7 @@
 */
 
 // ⚠️ इथे तुमची Apps Script Web App URL टाका (README.md मध्ये स्टेप्स दिले आहेत)
-const API_URL = "https://script.google.com/macros/s/AKfycbzqmbPQfXPC5QzmetZp2nTgVIdPzzTDFGrYSoqMXJkJ-wwAYynj3itnE7PGoSPqvIul7A/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbxo9e4fceDAEWkLGL8uAUeUQ1GIYacLqUHmrEoJj4WhZK-xWVH65YhO0Hyy0HPY4Pk/exec";
 
 let currentUser = null;       // DDO कोड / युजरनेम
 let currentRole = null;       // "user" किंवा "master"
@@ -26,11 +26,22 @@ function composeUserKey(username, head, budgetType) {
 // प्रत्येक annexId साठी सध्याचा data (rows किंवा keyvalue) इथे मेमरीत ठेवतो
 const state = {};
 
-function init() {
+// सध्या कोणता नमुना (टेम्प्लेट) दाखवायचा — बजेट प्रकारानुसार ठरतो
+let ACTIVE_ANNEX_CONFIG = ANNEX_CONFIG; // डीफॉल्ट: चारमाही
+
+function getConfigForBudgetType(budgetType) {
+  return budgetType === "yearly" ? YEARLY_ANNEX_CONFIG : ANNEX_CONFIG;
+}
+
+function init(annexConfig) {
+  ACTIVE_ANNEX_CONFIG = annexConfig || ACTIVE_ANNEX_CONFIG;
   const tabsEl = document.getElementById("tabs");
   const panelsEl = document.getElementById("panels");
+  tabsEl.innerHTML = "";   // पुन्हा-initialize करता यावे म्हणून (बजेट प्रकार बदलल्यावर) आधी रिकामे करतो
+  panelsEl.innerHTML = "";
+  Object.keys(state).forEach(k => delete state[k]);
 
-  ANNEX_CONFIG.forEach((annex, idx) => {
+  ACTIVE_ANNEX_CONFIG.forEach((annex, idx) => {
     // Tab बटण
     const tabBtn = document.createElement("button");
     tabBtn.className = "tab-btn" + (idx === 0 ? " active" : "");
@@ -60,6 +71,7 @@ function deepCopyRows(rows) {
 
 function renderAnnexShell(annex) {
   let html = `<h2>${annex.title}</h2>`;
+  if (annex.note) html += `<p style="font-size:12.5px;color:#92400e;background:#fef9e7;padding:8px 10px;border-radius:6px;margin:0 0 10px;">ℹ️ ${annex.note}</p>`;
   if (annex.type === "keyvalue") {
     html += `<div class="kv-form" id="body-${annex.id}"></div>`;
   } else {
@@ -126,10 +138,11 @@ function renderRow(annex, row, index) {
 
   annex.columns.forEach(c => {
     const td = document.createElement("td");
-    const isSummedCell = row.sumRows && c.editable && c.type === "number";
+    const isSummedCell = row.sumRows && c.editable && (c.type === "number" || c.summable);
+    const isCrossFormulaCell = row.crossFormulaCol === c.key;
     if (c.auto === "serial") {
       td.textContent = index + 1;
-    } else if (c.formula || isSummedCell) {
+    } else if (c.formula || isSummedCell || isCrossFormulaCell) {
       // sूत्र-आधारित किंवा उभी-बेरीज (sumRows) असलेला सेल — फक्त वाचनीय, id देऊन ठेवतो जेणेकरून recalcAnnex अपडेट करू शकेल
       td.id = `cell-${annex.id}-${index}-${c.key}`;
       td.className = "computed-cell";
@@ -173,12 +186,18 @@ function recalcAnnex(annex) {
   rows.forEach(row => {
     if (row.sumRows) {
       annex.columns.forEach(c => {
-        if (c.editable && c.type === "number") {
+        if (c.editable && (c.type === "number" || c.summable)) {
           let sum = 0;
           row.sumRows.forEach(j => { if (rows[j]) sum += num(rows[j][c.key]); });
           row[c.key] = sum;
         }
       });
+    }
+  });
+
+  rows.forEach(row => {
+    if (row.crossFormula && row.crossFormulaCol) {
+      row[row.crossFormulaCol] = row.crossFormula(rows);
     }
   });
 
@@ -204,7 +223,7 @@ function formatNum(v) {
 }
 
 function addRow(annexId) {
-  const annex = ANNEX_CONFIG.find(a => a.id === annexId);
+  const annex = ACTIVE_ANNEX_CONFIG.find(a => a.id === annexId);
   const newRow = {};
   annex.columns.forEach(c => { if (c.key !== "sr") newRow[c.key] = ""; });
   state[annexId].push(newRow);
@@ -213,7 +232,7 @@ function addRow(annexId) {
 
 function removeRow(annexId, index) {
   state[annexId].splice(index, 1);
-  const annex = ANNEX_CONFIG.find(a => a.id === annexId);
+  const annex = ACTIVE_ANNEX_CONFIG.find(a => a.id === annexId);
   renderAnnexBody(annex);
 }
 
@@ -264,7 +283,7 @@ async function saveAnnex(annexId) {
   if (!user) return;
   const statusEl = document.getElementById(`status-${annexId}`);
   statusEl.textContent = "जतन करत आहे...";
-  const annex = ANNEX_CONFIG.find(a => a.id === annexId);
+  const annex = ACTIVE_ANNEX_CONFIG.find(a => a.id === annexId);
   try {
     const result = await apiCall({
       action: "save",
@@ -298,7 +317,7 @@ async function loadAllData() {
   try {
     const result = await apiCall({ action: "loadAll", user });
     if (result && result.ok) {
-      ANNEX_CONFIG.forEach(annex => {
+      ACTIVE_ANNEX_CONFIG.forEach(annex => {
         const saved = result.data[annex.id];
         if (saved && saved.length) {
           if (annex.type === "keyvalue") {
@@ -334,7 +353,7 @@ function showSummary() {
   let html = `<h3>${user} — सद्यस्थिती एकूण रक्कम (सध्या स्क्रीनवरील/उघडलेल्या डेटानुसार)</h3>
     <table class="summary-table"><tr><th>विवरणपत्र</th><th>एकूण (₹ हजारात)</th></tr>`;
   let grand = 0;
-  ANNEX_CONFIG.forEach(annex => {
+  ACTIVE_ANNEX_CONFIG.forEach(annex => {
     if (!annex.summaryKey) return;
     let sum = 0;
     const rows = annex.type === "keyvalue" ? [] : state[annex.id];
@@ -429,6 +448,8 @@ function enterApp() {
   localStorage.setItem("budgetform_head", currentHead || "");
   localStorage.setItem("budgetform_actualhead", currentActualHead || "");
   localStorage.setItem("budgetform_budgettype", currentBudgetType || "");
+  // सामान्य युजरने निवडलेल्या बजेट-प्रकारानुसार योग्य नमुना (चारमाही/वार्षिक) आधी तयार करतो
+  if (currentRole === "user") init(getConfigForBudgetType(currentBudgetType));
   applyRoleUI();
 }
 
@@ -466,13 +487,14 @@ async function refreshUsersList() {
         const td = document.createElement("td");
         const st = typeKey === "fourMonth" ? u.status4Month : u.statusYearly;
         const label = st.hasData ? "✅" : "⏳";
+        const budgetType = typeKey === "fourMonth" ? "4month" : "yearly";
         const btn = document.createElement("button");
         btn.className = "view-user-btn";
         btn.textContent = label + " पहा";
         btn.title = st.hasData ? ("शेवटचे: " + st.lastUpdated) : "अजून भरले नाही";
         btn.onclick = () => {
-          document.getElementById("userCode").value =
-            composeUserKey(u.username, u.allowHead, typeKey === "fourMonth" ? "4month" : "yearly");
+          init(getConfigForBudgetType(budgetType)); // योग्य नमुना (चारमाही/वार्षिक) आधी लोड करतो
+          document.getElementById("userCode").value = composeUserKey(u.username, u.allowHead, budgetType);
           loadAllData();
         };
         td.appendChild(btn);
@@ -488,13 +510,11 @@ async function refreshConsolidatedGroups() {
   const myReqId = ++_groupsReqId;
   const groupsTable = document.getElementById("groupsTable");
   const byTypeTable = document.getElementById("byTypeTable");
-  const grandTable = document.getElementById("grandTotalTable");
   try {
     const result = await apiCall({ action: "listConsolidatedGroups" });
     if (myReqId !== _groupsReqId) return; // जुनी विनंती असल्यास दुर्लक्ष करतो
     groupsTable.innerHTML = "<tr><th>लेखाशीर्ष (Head)</th><th>बजेट प्रकार</th><th>शेवटचे अपडेट</th><th></th></tr>";
     byTypeTable.innerHTML = "<tr><th>बजेट प्रकार</th><th>शेवटचे अपडेट</th><th></th></tr>";
-    grandTable.innerHTML = "<tr><th>शेवटचे अपडेट</th><th></th></tr>";
     if (!result || !result.ok) return;
 
     if (!result.groups.length) {
@@ -505,7 +525,7 @@ async function refreshConsolidatedGroups() {
       tr.innerHTML = `<td>${g.head}</td>
         <td>${g.budgetType === "yearly" ? "वार्षिक बजेट" : "चारमाही बजेट"}</td>
         <td>${g.lastUpdated}</td><td></td>`;
-      addViewButton(tr, g.key);
+      addViewButton(tr, g.key, g.budgetType);
       groupsTable.appendChild(tr);
     });
 
@@ -516,26 +536,18 @@ async function refreshConsolidatedGroups() {
       const tr = document.createElement("tr");
       tr.innerHTML = `<td>${g.budgetType === "yearly" ? "वार्षिक बजेट (सर्व Head मिळून)" : "चारमाही बजेट (सर्व Head मिळून)"}</td>
         <td>${g.lastUpdated}</td><td></td>`;
-      addViewButton(tr, g.key);
+      addViewButton(tr, g.key, g.budgetType);
       byTypeTable.appendChild(tr);
     });
-
-    if (result.grandTotal) {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `<td>${result.grandTotal.lastUpdated}</td><td></td>`;
-      addViewButton(tr, result.grandTotal.key);
-      grandTable.appendChild(tr);
-    } else {
-      grandTable.innerHTML += `<tr><td colspan="2">अजून कोणतेही एकत्रीकरण झालेले नाही.</td></tr>`;
-    }
   } catch (e) { /* silent */ }
 }
 
-function addViewButton(tr, key) {
+function addViewButton(tr, key, budgetType) {
   const btn = document.createElement("button");
   btn.className = "view-user-btn";
   btn.textContent = "👁 पहा";
   btn.onclick = () => {
+    init(getConfigForBudgetType(budgetType)); // योग्य नमुना आधी लोड करतो, मगच डेटा उघडतो
     document.getElementById("userCode").value = key;
     loadAllData();
   };
@@ -548,8 +560,8 @@ async function consolidateAll() {
   try {
     const result = await apiCall({ action: "consolidate" });
     if (result && result.ok) {
-      statusEl.textContent = `✅ एकत्रीकरण पूर्ण झाले — ${result.groups.length} Head+प्रकार गट, ` +
-        `${result.byType.length} प्रकार-निहाय एकत्रीकरण, व संपूर्ण एकत्रित बजेट तयार/अपडेट झाले.`;
+      statusEl.textContent = `✅ एकत्रीकरण पूर्ण झाले — ${result.groups.length} Head+प्रकार गट व ` +
+        `${result.byType.length} प्रकार-निहाय एकत्रीकरण तयार/अपडेट झाले.`;
       refreshConsolidatedGroups();
     } else {
       statusEl.textContent = "❌ त्रुटी: " + (result ? result.error : "अज्ञात");
@@ -589,6 +601,7 @@ window.addEventListener("DOMContentLoaded", () => {
     currentBudgetType = localStorage.getItem("budgetform_budgettype") || "4month";
     document.getElementById("loginScreen").style.display = "none";
     document.getElementById("appRoot").style.display = "block";
+    if (currentRole === "user") init(getConfigForBudgetType(currentBudgetType));
     applyRoleUI();
   }
 });

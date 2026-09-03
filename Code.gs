@@ -14,7 +14,7 @@
 
 // ⚠️ इथे तुमच्या Google Drive मधील त्या फोल्डरची ID टाका, जिथे सर्व युजर्सच्या शीट्स सेव्ह व्हाव्यात.
 // फोल्डर उघडा -> URL मधील शेवटचा भाग (folders/ नंतरचा भाग) कॉपी करा.
-const FOLDER_ID = "PASTE_YOUR_GOOGLE_DRIVE_FOLDER_ID_HERE";
+const FOLDER_ID = "1kmbDQBTwPuyTbs3J0mOMXQzPOcLxN5Tk";
 
 // ⚠️ "User Management" Google Sheet ची ID (User Name / Password कॉलम असलेली शीट)
 const USERS_SHEET_ID = "1kPrS2B4MENE7zpyxObeeWOrmzZiTXDp0XVgrXtlbOD0";
@@ -27,6 +27,18 @@ const ANNEX_TYPES = {
   annex3: "dynamic", annex3a: "dynamic", annex4: "keyvalue",
   annex5: "fixed", annex6: "dynamic", annex7: "fixed",
 };
+
+// वार्षिक बजेट नमुन्याचे Annex प्रकार (yearly-config.js शी जुळणारे असावे) — चारमाहीपेक्षा पूर्ण वेगळा नमुना
+const YEARLY_ANNEX_TYPES = {
+  yannex1: "dynamic", yannex1a: "dynamic",
+  yannex2: "fixed", yannex2a: "fixed", yannex2b: "fixed", yannex2c: "dynamic",
+  yannex3: "fixed", yannex3a: "keyvalue", yannex3b: "dynamic", yannex3c: "fixed",
+  yannex4: "dynamic", yannex5: "fixed", yannex6: "keyvalue", yannex7: "fixed", yannex8: "fixed",
+};
+
+function annexTypesFor_(budgetType) {
+  return budgetType === "yearly" ? YEARLY_ANNEX_TYPES : ANNEX_TYPES;
+}
 
 function doPost(e) {
   try {
@@ -272,7 +284,7 @@ function consolidateAll() {
 
       const groupKey = composeMasterGroupKey_(head, budgetType);
       const groupSS = getOrCreateUserSpreadsheet(groupKey);
-      consolidateGroup_(groupSS, userSheets);
+      consolidateGroup_(groupSS, userSheets, annexTypesFor_(budgetType));
 
       const officeCount = Object.keys(userSheets).length;
       const infoSheet = groupSS.getSheetByName("माहिती");
@@ -291,8 +303,10 @@ function consolidateAll() {
   if (!groupsProcessed.length) return { ok: false, error: "अजून कोणत्याही DDO ने डेटा भरलेला नाही." };
 
   /* ---------- पातळी 2: फक्त Budget Type निहाय (सर्व Head मिळून) ---------- */
+  // टीप: वार्षिक व चारमाही आता पूर्णपणे वेगळे नमुने (वेगळे Annex) वापरतात, त्यामुळे या दोघांना
+  // एकत्र बेरीज करणारी "पातळी 3 (ग्रँड टोटल)" यापुढे अर्थहीन ठरते — म्हणून ती काढून टाकली आहे.
+  // प्रत्येक बजेट-प्रकार आता स्वतःच्या Annex-नकाशाप्रमाणे (fixed/dynamic/keyvalue) एकत्र होतो.
   const byTypeProcessed = []; // {budgetType, key, headCount}
-  const typeConsolidatedSheets = {}; // budgetType -> Spreadsheet (पातळी 3 साठी)
   budgetTypes.forEach(budgetType => {
     const headSheets = groupSheetsByType[budgetType];
     const headCount = Object.keys(headSheets).length;
@@ -300,7 +314,7 @@ function consolidateAll() {
 
     const typeKey = "MasterByType_" + (budgetType === "yearly" ? "Yearly" : "4Month");
     const typeSS = getOrCreateUserSpreadsheet(typeKey);
-    consolidateGroup_(typeSS, headSheets); // इथे स्त्रोत = head (username ऐवजी) — तेच जनरिक फंक्शन वापरतो
+    consolidateGroup_(typeSS, headSheets, annexTypesFor_(budgetType)); // स्त्रोत = head (username ऐवजी)
 
     const infoSheet = typeSS.getSheetByName("माहिती");
     if (infoSheet) {
@@ -311,26 +325,9 @@ function consolidateAll() {
     }
 
     byTypeProcessed.push({ budgetType, key: typeKey, headCount });
-    typeConsolidatedSheets[budgetType] = typeSS;
   });
 
-  /* ---------- पातळी 3: संपूर्ण एकत्रित बजेट (सर्व Head + दोन्ही प्रकार मिळून) ---------- */
-  let grandTotal = null;
-  if (Object.keys(typeConsolidatedSheets).length > 0) {
-    const grandKey = "MasterGrandTotal";
-    const grandSS = getOrCreateUserSpreadsheet(grandKey);
-    consolidateGroup_(grandSS, typeConsolidatedSheets); // स्त्रोत = budgetType ("yearly"/"4month")
-
-    const infoSheet = grandSS.getSheetByName("माहिती");
-    if (infoSheet) {
-      infoSheet.getRange(1, 1).setValue("संपूर्ण एकत्रित बजेट — सर्व लेखाशीर्ष व दोन्ही प्रकार मिळून");
-      infoSheet.getRange(2, 1).setValue("शेवटचे एकत्रीकरण: " + new Date().toLocaleString("mr-IN"));
-      infoSheet.getRange(3, 1).setValue("⚠️ लक्षात ठेवा: यात वार्षिक व चारमाही बजेटचे आकडे एकत्र बेरीज झालेले आहेत.");
-    }
-    grandTotal = { key: grandKey };
-  }
-
-  return { ok: true, groups: groupsProcessed, byType: byTypeProcessed, grandTotal };
+  return { ok: true, groups: groupsProcessed, byType: byTypeProcessed };
 }
 
 // याआधी तयार झालेले एकत्रीकरण (तिन्ही पातळ्या) फोल्डरमध्ये शोधून यादी परत करतो —
@@ -341,7 +338,6 @@ function listConsolidatedGroups() {
   const files = folder.getFiles();
   const groups = [];    // पातळी 1: head+type
   const byType = [];    // पातळी 2: type-only
-  let grandTotal = null; // पातळी 3
 
   while (files.hasNext()) {
     const f = files.next();
@@ -360,18 +356,18 @@ function listConsolidatedGroups() {
       const typeCode = rest.substring("MasterByType_".length);
       byType.push({ budgetType: typeCode === "Yearly" ? "yearly" : "4month",
         key: "MasterByType_" + typeCode, lastUpdated });
-    } else if (rest === "MasterGrandTotal") {
-      grandTotal = { key: "MasterGrandTotal", lastUpdated };
     }
   }
-  return { ok: true, groups, byType, grandTotal };
+  return { ok: true, groups, byType };
 }
 
 // एका (Head + Budget Type) गटातील सर्व DDO चा डेटा एकत्र करून त्या गटाच्या स्वतंत्र स्प्रेडशीटमध्ये
-// (groupSS) प्रत्येक Annex साठी सर्वसाधारण annexId नावाच्या टॅबमध्ये लिहितो
-function consolidateGroup_(groupSS, userSheets) {
-  Object.keys(ANNEX_TYPES).forEach(annexId => {
-    const type = ANNEX_TYPES[annexId];
+// (groupSS) प्रत्येक Annex साठी सर्वसाधारण annexId नावाच्या टॅबमध्ये लिहितो.
+// annexTypesMap = ANNEX_TYPES (चारमाही) किंवा YEARLY_ANNEX_TYPES (वार्षिक) — बजेट प्रकारानुसार बरोबर नकाशा वापरणे आवश्यक,
+// कारण दोन्ही नमुन्यांचे Annex-आयडी व रचना वेगळी आहे.
+function consolidateGroup_(groupSS, userSheets, annexTypesMap) {
+  Object.keys(annexTypesMap).forEach(annexId => {
+    const type = annexTypesMap[annexId];
     const sheet = getOrCreateAnnexSheet(groupSS, annexId);
     sheet.clearContents();
 

@@ -116,7 +116,7 @@ function renderAnnexBody(annex) {
     if (c.width) th.style.width = c.width;
     headRow.appendChild(th);
   });
-  if (annex.type === "dynamic") headRow.appendChild(document.createElement("th")); // हटवा column
+  if (annex.type === "dynamic" || annex.hasGroups) headRow.appendChild(document.createElement("th")); // हटवा column
   thead.appendChild(headRow);
   table.appendChild(thead);
 
@@ -125,7 +125,50 @@ function renderAnnexBody(annex) {
   table.appendChild(tbody);
 
   state[annex.id].forEach((row, i) => renderRow(annex, row, i));
+  if (annex.hasGroups) insertGroupAddButtons(annex);
   recalcAnnex(annex);
+}
+
+// प्रत्येक sumGroup असलेल्या (उपबेरीज) ओळीच्या आधी "+ नवीन पद जोडा" अशी एक इनलाईन बटण-ओळ घालतो
+function insertGroupAddButtons(annex) {
+  const tbody = document.getElementById(`tbody-${annex.id}`);
+  const rows = state[annex.id];
+  const colCount = annex.columns.length + 1; // +1 हटवा column साठी
+  rows.forEach((row, i) => {
+    if (!row.sumGroup) return;
+    const targetTr = document.getElementById(`row-${annex.id}-${i}`);
+    if (!targetTr) return;
+    const addTr = document.createElement("tr");
+    addTr.className = "add-group-row";
+    const td = document.createElement("td");
+    td.colSpan = colCount;
+    const btn = document.createElement("button");
+    btn.className = "add-row-btn";
+    btn.textContent = "+ नवीन पद जोडा";
+    btn.onclick = () => addGroupRow(annex.id, row.sumGroup);
+    td.appendChild(btn);
+    addTr.appendChild(td);
+    tbody.insertBefore(addTr, targetTr);
+  });
+}
+
+// दिलेल्या गटात (group) एक नवीन रिकामी ओळ जोडतो — सबटोटलच्या बरोबर आधी बसते (index पुन्हा शोधून)
+function addGroupRow(annexId, group) {
+  const annex = ACTIVE_ANNEX_CONFIG.find(a => a.id === annexId);
+  const rows = state[annexId];
+  let insertAt = rows.findIndex(r => r.sumGroup === group);
+  if (insertAt === -1) insertAt = rows.length;
+  const newRow = { group };
+  annex.columns.forEach(c => { if (c.key !== "sr" && !(c.key in newRow)) newRow[c.key] = ""; });
+  rows.splice(insertAt, 0, newRow);
+  renderAnnexBody(annex);
+}
+
+// गट-रकाना (group असलेला) काढून टाकतो — नवीन जोडलेली किंवा मूळ नमुन्यातील दोन्ही काढता येतात
+function removeGroupRow(annexId, index) {
+  state[annexId].splice(index, 1);
+  const annex = ACTIVE_ANNEX_CONFIG.find(a => a.id === annexId);
+  renderAnnexBody(annex);
 }
 
 function renderRow(annex, row, index) {
@@ -138,7 +181,7 @@ function renderRow(annex, row, index) {
 
   annex.columns.forEach(c => {
     const td = document.createElement("td");
-    const isSummedCell = row.sumRows && c.editable && (c.type === "number" || c.summable);
+    const isSummedCell = (row.sumRows || row.sumGroup || row.sumIds) && c.editable && (c.type === "number" || c.summable);
     const isCrossFormulaCell = row.crossFormulaCol === c.key;
     if (c.auto === "serial") {
       td.textContent = index + 1;
@@ -171,6 +214,16 @@ function renderRow(annex, row, index) {
     btn.onclick = () => removeRow(annex.id, index);
     td.appendChild(btn);
     tr.appendChild(td);
+  } else if (annex.hasGroups) {
+    const td = document.createElement("td");
+    if (row.group) {
+      const btn = document.createElement("button");
+      btn.textContent = "✕";
+      btn.className = "del-row-btn";
+      btn.onclick = () => removeGroupRow(annex.id, index);
+      td.appendChild(btn);
+    }
+    tr.appendChild(td);
   }
 
   tbody.appendChild(tr);
@@ -189,6 +242,35 @@ function recalcAnnex(annex) {
         if (c.editable && (c.type === "number" || c.summable)) {
           let sum = 0;
           row.sumRows.forEach(j => { if (rows[j]) sum += num(rows[j][c.key]); });
+          row[c.key] = sum;
+        }
+      });
+    }
+  });
+
+  // गट-आधारित उपबेरीज (position ऐवजी group नावाने — नवीन पद जोडले/काढले तरी बरोबर राहते)
+  rows.forEach(row => {
+    if (row.sumGroup) {
+      annex.columns.forEach(c => {
+        if (c.editable && (c.type === "number" || c.summable)) {
+          let sum = 0;
+          rows.forEach(r2 => { if (r2.group === row.sumGroup) sum += num(r2[c.key]); });
+          row[c.key] = sum;
+        }
+      });
+    }
+  });
+
+  // id-आधारित उच्च-स्तरीय बेरीज (विशिष्ट उपबेरीज-ओळी एकत्र करण्यासाठी — position-independent)
+  rows.forEach(row => {
+    if (row.sumIds) {
+      annex.columns.forEach(c => {
+        if (c.editable && (c.type === "number" || c.summable)) {
+          let sum = 0;
+          row.sumIds.forEach(id => {
+            const r2 = rows.find(x => x.id === id);
+            if (r2) sum += num(r2[c.key]);
+          });
           row[c.key] = sum;
         }
       });

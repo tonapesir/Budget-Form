@@ -102,6 +102,17 @@ td input {
   border-radius: 6px;
   cursor: pointer;
 }
+.add-group-row td {
+  background: #f8fafc;
+  text-align: center;
+  padding: 6px;
+  border-style: dashed;
+}
+.add-group-row .add-row-btn {
+  margin: 2px 0;
+  padding: 4px 12px;
+  font-size: 12px;
+}
 .del-row-btn {
   background: #fee2e2;
   color: #b91c1c;
